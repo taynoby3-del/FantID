@@ -9,9 +9,9 @@ from telegram.ext import Application, CommandHandler, MessageHandler, filters, C
 
 # ================== КОНФИГ ==================
 TOKEN = "8791632400:AAGr7NZceT_713LS_28omSU7lhhKd0yUSxE"
-CHANNEL_LINK = "https://t.me/Fant1kKanal"
+CHANNEL_LINK = "https://t.me/FantProject21"
 PHOTO_PATH = "start.jpg"
-STICKER_ID = "CAACAgIAAxkBAAEW-Zhp6PvpjVww_OSp-qPxRnb_sZl4IQACKT4AAu_rwUpFGYItDzsqSTsE"  # замени на свой file_id анимированного стикера
+STICKER_ID = "CAACAgIAAxkDAAMwaej8TZlmZhpx3Pg4PHEmsWNG_nQAAik-AALv68FKRRmCLQ87Kkk7BA"
 
 # ================== ЛОГИРОВАНИЕ ==================
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -152,7 +152,7 @@ async def get_chat_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     add_history(user_id, "Чат", chat_id, "текущий чат")
     await safe_edit_or_send(query.message, f"🔢 <b>ID этого чата:</b> <code>{chat_id}</code>", reply_markup=back_button())
 
-# ================== ОСНОВНОЙ ОБРАБОТЧИК ПЕРЕСЛАННЫХ СООБЩЕНИЙ ==================
+# ================== ОСНОВНОЙ ОБРАБОТЧИК ПЕРЕСЛАННЫХ СООБЩЕНИЙ (ИСПРАВЛЕН) ==================
 async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "awaiting_type" not in context.user_data:
         return
@@ -160,29 +160,49 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.message
     user_id = update.effective_user.id
 
-    # Получаем информацию об оригинальном отправителе через forward_origin
-    origin = msg.forward_origin
-    if origin is None:
-        await update.message.reply_text("❌ Не удалось определить отправителя (возможно, переслано без сохранения оригинала).")
-        return
-
+    # Пытаемся получить оригинального отправителя (новое и старые поля)
     original_id = None
     original_name = None
     is_bot = False
+    origin_type = None
 
-    if origin.type == "user":
-        original_id = origin.user.id
-        original_name = origin.user.first_name
-        is_bot = origin.user.is_bot
-    elif origin.type == "chat":
-        original_id = origin.chat.id
-        original_name = origin.chat.title
-    elif origin.type == "channel":
-        original_id = origin.chat.id
-        original_name = origin.chat.title
+    # 1. Новый метод forward_origin (Bot API 6.1+)
+    origin = msg.forward_origin
+    if origin:
+        if origin.type == "user":
+            original_id = origin.user.id
+            original_name = origin.user.first_name
+            is_bot = origin.user.is_bot
+            origin_type = "user"
+        elif origin.type == "chat":
+            original_id = origin.chat.id
+            original_name = origin.chat.title
+            origin_type = "chat"
+        elif origin.type == "channel":
+            original_id = origin.chat.id
+            original_name = origin.chat.title
+            origin_type = "channel"
+        else:
+            origin_type = "unknown"
     else:
-        await update.message.reply_text("❌ Неподдерживаемый тип пересылки.")
-        return
+        # 2. Старый метод forward_from (для пользователей/ботов)
+        if msg.forward_from:
+            original_id = msg.forward_from.id
+            original_name = msg.forward_from.first_name
+            is_bot = msg.forward_from.is_bot
+            origin_type = "user"
+        # 3. Старый метод forward_from_chat (для групп/каналов)
+        elif msg.forward_from_chat:
+            original_id = msg.forward_from_chat.id
+            original_name = msg.forward_from_chat.title
+            # Определяем тип: канал или супергруппа
+            if msg.forward_from_chat.type == "channel":
+                origin_type = "channel"
+            else:
+                origin_type = "chat"
+        else:
+            await update.message.reply_text("❌ Не удалось определить отправителя. Перешлите сообщение с сохранением подписи.")
+            return
 
     if original_id is None:
         await update.message.reply_text("❌ Не удалось извлечь ID.")
@@ -191,15 +211,15 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Проверка соответствия типа
     success = False
     if obj_type == "user":
-        if not is_bot and origin.type == "user":
+        if origin_type == "user" and not is_bot:
             await update.message.reply_html(f"👤 <b>Пользователь:</b> {original_name}\n🆔 <code>{original_id}</code>")
             update_stats(user_id, "ID пользователя")
             add_history(user_id, "Пользователь", original_id, original_name)
             success = True
         else:
-            await update.message.reply_text("❌ Это не пользователь (или бот). Выберите правильный тип.")
+            await update.message.reply_text("❌ Это не пользователь (или это бот). Выберите правильный тип.")
     elif obj_type == "bot":
-        if is_bot:
+        if origin_type == "user" and is_bot:
             await update.message.reply_html(f"🤖 <b>Бот:</b> {original_name}\n🆔 <code>{original_id}</code>")
             update_stats(user_id, "ID бота")
             add_history(user_id, "Бот", original_id, original_name)
@@ -207,7 +227,7 @@ async def handle_forwarded(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Это не бот.")
     elif obj_type == "channel":
-        if origin.type in ("chat", "channel"):
+        if origin_type == "channel":
             await update.message.reply_html(f"📢 <b>Канал:</b> {original_name}\n🆔 <code>{original_id}</code>")
             update_stats(user_id, "ID канала")
             add_history(user_id, "Канал", original_id, original_name)
@@ -340,7 +360,7 @@ def main():
     app.add_handler(MessageHandler(filters.FORWARDED, handle_forwarded))
     app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     app.add_handler(MessageHandler(filters.PHOTO | filters.VIDEO | filters.AUDIO | filters.VOICE | filters.Document.ALL, handle_media))
-    logger.info("🚀 Fant ID бот запущен (исправлена ошибка forward_origin)")
+    logger.info("🚀 Fant ID бот запущен (пофикшены пересылки)")
     loop = asyncio.get_event_loop()
     loop.create_task(start_web())
     app.run_polling()
